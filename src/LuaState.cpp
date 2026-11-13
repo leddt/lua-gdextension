@@ -192,7 +192,10 @@ Ref<LuaTable> LuaState::create_table(const Dictionary& initial_values) {
 	String error;
 	bool ok = protected_call(lua_state, [&](lua_State *L) {
 		sol::state_view view(L);
-		table = Ref<LuaTable>(memnew(LuaTable(to_table(view, initial_values))));
+		// Build the Lua table before memnew: MSVC allocates first, and a Lua error
+		// thrown by to_table would then reach godot-cpp's fatal placement delete.
+		sol::table lua_table = to_table(view, initial_values);
+		table = Ref<LuaTable>(memnew(LuaTable(std::move(lua_table))));
 	}, &error);
 	ERR_FAIL_COND_V_MSG(!ok, nullptr, error);
 	return table;
