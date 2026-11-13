@@ -43,7 +43,7 @@ jobs:
           # macOS runners are scarce: build both targets on one machine.
           - platform: macos
             arch: universal
-            runner: macos-latest
+            runner: macos-15-intel
             targets: template_debug template_release
     steps:
       - uses: actions/checkout@v4
