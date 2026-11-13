@@ -22,5 +22,7 @@ def generate(env):
     else:
         env.Append(CPPDEFINES="LUA_USE_POSIX")
 
+    # Arithmetic on strings would run strtod in C, a cost the instruction hook cannot see.
+    env.Append(CPPDEFINES=["LUA_NOCVTS2N"])
     env.Append(CPPDEFINES=["SOL_USING_CXX_LUA=1"])
     env.Append(CPPPATH="lib/lua")

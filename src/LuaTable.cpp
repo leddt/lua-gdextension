@@ -22,6 +22,8 @@
 
 #include "LuaTable.hpp"
 
+#include "utils/protected_call.hpp"
+
 #include "utils/convert_godot_lua.hpp"
 #include "utils/metatable.hpp"
 #include "utils/stack_top_checker.hpp"
@@ -37,39 +39,44 @@ LuaTable::LuaTable(sol::table&& table) : LuaObjectSubclass(table) {}
 LuaTable::LuaTable(const sol::table& table) : LuaObjectSubclass(table) {}
 
 sol::optional<Variant> LuaTable::try_get(const Variant& key, bool raw) const {
-	StackTopChecker topcheck(lua_object.lua_state());
-	lua_State *L = lua_object.lua_state();
-	sol::stack::push(L, lua_object);
-	lua_push(L, key);
-	if (raw) {
-		lua_rawget(L, -2);
-	}
-	else {
-		lua_gettable(L, -2);
-	}
-	auto _ = sol::stack::pop_n(L, 2);
-	if (lua_isnoneornil(L, -1)) {
-		return std::nullopt;
-	}
-	else {
-		return to_variant(L, -1);
-	}
+	sol::optional<Variant> value;
+	String error;
+	bool ok = protected_call(lua_object.lua_state(), [&](lua_State *L) {
+		StackTopChecker topcheck(L);
+		sol::stack::push(L, lua_object);
+		lua_push(L, key);
+		if (raw) {
+			lua_rawget(L, -2);
+		}
+		else {
+			lua_gettable(L, -2);
+		}
+		auto _ = sol::stack::pop_n(L, 2);
+		if (!lua_isnoneornil(L, -1)) {
+			value = to_variant(L, -1);
+		}
+	}, &error);
+	ERR_FAIL_COND_V_MSG(!ok, std::nullopt, error);
+	return value;
 }
 
 bool LuaTable::try_set(const Variant& key, const Variant& value, bool raw) {
 	ERR_FAIL_COND_V_MSG(key == Variant(), false, "Table key cannot be null");
 	
-	StackTopChecker topcheck(lua_object.lua_state());
-	lua_State *L = lua_object.lua_state();
-	auto table_popper = sol::stack::push_pop(L, lua_object);
-	lua_push(L, key);
-	lua_push(L, value);
-	if (raw) {
-		lua_rawset(L, -3);
-	}
-	else {
-		lua_settable(L, -3);
-	}
+	String error;
+	bool ok = protected_call(lua_object.lua_state(), [&](lua_State *L) {
+		StackTopChecker topcheck(L);
+		auto table_popper = sol::stack::push_pop(L, lua_object);
+		lua_push(L, key);
+		lua_push(L, value);
+		if (raw) {
+			lua_rawset(L, -3);
+		}
+		else {
+			lua_settable(L, -3);
+		}
+	}, &error);
+	ERR_FAIL_COND_V_MSG(!ok, false, error);
 	return true;
 }
 
@@ -122,36 +129,42 @@ void LuaTable::set_metatable(LuaTable *metatable) {
 }
 
 bool LuaTable::_iter_init(const Variant& iter) const {
-	StackTopChecker topcheck(lua_object.lua_state());
-	lua_State *L = lua_object.lua_state();
-	auto table_popper = sol::stack::push_pop(lua_object);
-	lua_pushnil(L);
-	if (lua_next(L, -2)) {
-		Array arg = iter;
-		arg.resize(1);
-		arg[0] = to_variant(L, -2);
-		lua_pop(L, 2);
-		return true;
-	}
-	else {
-		return false;
-	}
+	bool has_next = false;
+	String error;
+	bool ok = protected_call(lua_object.lua_state(), [&](lua_State *L) {
+		StackTopChecker topcheck(L);
+		auto table_popper = sol::stack::push_pop(lua_object);
+		lua_pushnil(L);
+		if (lua_next(L, -2)) {
+			Array arg = iter;
+			arg.resize(1);
+			arg[0] = to_variant(L, -2);
+			lua_pop(L, 2);
+			has_next = true;
+		}
+	}, &error);
+	ERR_FAIL_COND_V_MSG(!ok, false, error);
+	return has_next;
 }
 
 bool LuaTable::_iter_next(const Variant& iter) const {
-	StackTopChecker topcheck(lua_object.lua_state());
-	lua_State *L = lua_object.lua_state();
-	Array arg = iter;
-	auto table_popper = sol::stack::push_pop(lua_object);
-	lua_push(L, arg[0]);
-	if (lua_next(L, -2)) {
-		arg[0] = to_variant(L, -2);
-		lua_pop(L, 2);
-		return true;
-	}
-	else {
-		return false;
-	}
+	// A key that does not survive the round trip through Variant (invalid UTF-8, embedded NUL)
+	// makes `lua_next` raise "invalid key to 'next'": the iteration then stops with an error.
+	bool has_next = false;
+	String error;
+	bool ok = protected_call(lua_object.lua_state(), [&](lua_State *L) {
+		StackTopChecker topcheck(L);
+		Array arg = iter;
+		auto table_popper = sol::stack::push_pop(lua_object);
+		lua_push(L, arg[0]);
+		if (lua_next(L, -2)) {
+			arg[0] = to_variant(L, -2);
+			lua_pop(L, 2);
+			has_next = true;
+		}
+	}, &error);
+	ERR_FAIL_COND_V_MSG(!ok, false, error);
+	return has_next;
 }
 
 Variant LuaTable::_iter_get(const Variant& iter) const {

@@ -28,6 +28,7 @@
 #include "utils/_G_metatable.hpp"
 #include "utils/convert_godot_lua.hpp"
 #include "utils/module_names.hpp"
+#include "utils/protected_call.hpp"
 
 #include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/classes/engine.hpp>
@@ -44,17 +45,28 @@
 namespace luagdextension {
 
 /// Lua memory allocation callback.
-/// Uses Godot memory functions.
+/// Uses Godot memory functions and enforces `LuaState::MemoryBudget::limit`.
+/// Refusing a growth makes Lua run a full emergency collection and retry before raising
+/// a memory error, so the cap applies to live memory. Shrinking never fails, as Lua requires.
 static void *lua_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
+	LuaState::MemoryBudget *budget = static_cast<LuaState::MemoryBudget *>(ud);
+	// When `ptr` is null, `osize` encodes the object type, not a size.
+	size_t old_size = ptr != nullptr ? osize : 0;
 	if (nsize == 0) {
 		if (ptr != nullptr) {
 			memfree(ptr);
+			budget->used -= old_size;
 		}
 		return nullptr;
 	}
-	else {
-		return memrealloc(ptr, nsize);
+	if (budget->limit != 0 && nsize > old_size && budget->used - old_size + nsize > budget->limit) {
+		return nullptr;
 	}
+	void *new_ptr = memrealloc(ptr, nsize);
+	if (new_ptr != nullptr) {
+		budget->used = budget->used - old_size + nsize;
+	}
+	return new_ptr;
 }
 
 static int lua_panic_handler(lua_State *L) {
@@ -72,7 +84,7 @@ LuaState::LuaState()
 #ifdef LUAJIT  // LuaJIT needs its default allocator in x64 platforms
 	: lua_state(lua_panic_handler)
 #else
-	: lua_state(lua_panic_handler, lua_alloc)
+	: lua_state(lua_panic_handler, lua_alloc, &memory_budget)
 #endif
 {
 	setup_G_metatable(lua_state);
@@ -176,7 +188,14 @@ bool LuaState::are_libraries_opened(BitField<Library> libraries) const {
 }
 
 Ref<LuaTable> LuaState::create_table(const Dictionary& initial_values) {
-	return memnew(LuaTable(to_table(lua_state, initial_values)));
+	Ref<LuaTable> table;
+	String error;
+	bool ok = protected_call(lua_state, [&](lua_State *L) {
+		sol::state_view view(L);
+		table = Ref<LuaTable>(memnew(LuaTable(to_table(view, initial_values))));
+	}, &error);
+	ERR_FAIL_COND_V_MSG(!ok, nullptr, error);
+	return table;
 }
 
 Ref<LuaFunction> LuaState::create_function(const Callable& callable) {
@@ -288,6 +307,14 @@ bool LuaState::is_gc_running() const {
 
 uint64_t LuaState::get_memory_used() const {
 	return lua_state.memory_used();
+}
+
+void LuaState::set_memory_limit(int64_t bytes) {
+	memory_budget.limit = bytes > 0 ? (size_t) bytes : 0;
+}
+
+int64_t LuaState::get_memory_limit() const {
+	return (int64_t) memory_budget.limit;
 }
 
 LuaState::GcMode LuaState::change_gc_mode_incremental(int pause, int step_multiplier, int step_byte_size) {
@@ -442,6 +469,8 @@ void LuaState::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("restart_gc"), &LuaState::restart_gc);
 	ClassDB::bind_method(D_METHOD("is_gc_running"), &LuaState::is_gc_running);
 	ClassDB::bind_method(D_METHOD("get_memory_used"), &LuaState::get_memory_used);
+	ClassDB::bind_method(D_METHOD("set_memory_limit", "bytes"), &LuaState::set_memory_limit);
+	ClassDB::bind_method(D_METHOD("get_memory_limit"), &LuaState::get_memory_limit);
 	ClassDB::bind_method(D_METHOD("change_gc_mode_incremental", "pause", "step_multiplier", "step_byte_size"), &LuaState::change_gc_mode_incremental);
 	ClassDB::bind_method(D_METHOD("change_gc_mode_generational", "minor_multiplier", "major_multiplier"), &LuaState::change_gc_mode_generational);
 	ClassDB::bind_method(D_METHOD("supports_gc_mode", "gc_mode"), &LuaState::supports_gc_mode);

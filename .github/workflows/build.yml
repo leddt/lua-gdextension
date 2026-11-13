@@ -1,5 +1,12 @@
+# MindSlop fork: Lua 5.4 only, Linux x86_64, Windows x86_64 and macOS universal.
+# Upstream builds every platform and LuaJIT; this fork only ships what MindSlop uses.
 name: Build and Test
-on: [push, pull_request]
+on:
+  push:
+    branches: [mindslop]
+    tags: ["mindslop-*"]
+  pull_request:
+  workflow_dispatch:
 defaults:
   run:
     shell: bash
@@ -7,34 +14,27 @@ defaults:
 env:
   SCONS_CACHE: ${{ github.workspace }}/.scons-cache
   SCONS_VERSION: 4.10.1
+  GODOT_VERSION: 4.7.2-stable
 
 jobs:
-  build_linux:
-    name: ${{ matrix.platform }} (${{ matrix.arch }}, ${{ matrix.target }}, ${{ matrix.lua-runtime }})
-    runs-on: ${{ matrix.runner || 'ubuntu-22.04' }}
+  build:
+    name: ${{ matrix.platform }} (${{ matrix.arch }}, ${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         target: [template_debug, template_release]
-        arch: [x86_64, x86_32, arm64, arm32]
-        platform: [linux, android]
-        lua-runtime: [lua, luajit]
+        platform: [linux, windows, macos]
         include:
           - platform: linux
-            arch: x86_32
-            packages: [g++-multilib]
-          - platform: linux
-            arch: arm64
-            runner: ubuntu-24.04-arm
-          - platform: android
-            arch: x86_32
-            packages: [g++-multilib]
-          - platform: android
-            arch: arm32
-            packages: [g++-multilib]
-        exclude:
-          - platform: linux
-            arch: arm32
+            arch: x86_64
+            runner: ubuntu-22.04
+          - platform: windows
+            arch: x86_64
+            runner: windows-latest
+          - platform: macos
+            arch: universal
+            runner: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,171 +43,51 @@ jobs:
         uses: ./lib/godot-cpp/.github/actions/setup-godot-cpp
         with:
           platform: ${{ matrix.platform }}
-          scons-version: $SCONS_VERSION
-      - name: Setup dependencies
-        if: ${{ join(matrix.packages, ' ') != '' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install ${{ join(matrix.packages, ' ') }}
-      - name: Cache SCons files
-        uses: actions/cache@v4
-        with:
-          path: .scons-cache/
-          key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}-${{ hashfiles('.gitmodules', 'src/**') }}
-          restore-keys: |
-            ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}-
-      - name: Build artifact
-        run: |
-          scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=${{ matrix.target }} lua_runtime=${{ matrix.lua-runtime }}
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}
-          path: |
-            addons/lua-gdextension/build/libluagdextension.*
-  
-  build_windows:
-    name: ${{ matrix.platform }} (${{ matrix.arch }}, ${{ matrix.target }}, ${{ matrix.lua-runtime }})
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [template_debug, template_release]
-        arch: [x86_64, x86_32, arm64]
-        platform: [windows]
-        lua-runtime: [lua, luajit]
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Setup godot-cpp
-        uses: ./lib/godot-cpp/.github/actions/setup-godot-cpp
-        with:
-          platform: ${{ matrix.platform }}
-          scons-version: $SCONS_VERSION
+          scons-version: ${{ env.SCONS_VERSION }}
           windows-compiler: msvc
       - name: Cache SCons files
         uses: actions/cache@v4
         with:
           path: .scons-cache/
-          key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}-${{ hashfiles('.gitmodules', 'src/**') }}
+          key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-lua-${{ hashfiles('.gitmodules', 'src/**', 'tools/**') }}
           restore-keys: |
-            ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}-
+            ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-lua-
       - name: Build artifact
-        run: |
-          scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=${{ matrix.target }} lua_runtime=${{ matrix.lua-runtime }} vcvarsall_path="C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}
-          path: |
-            addons/lua-gdextension/build/libluagdextension.*
-          
-  build_web:
-    name: web (wasm32, ${{ matrix.target }}, ${{ matrix.threads && 'threads' || 'nothreads' }}, ${{ matrix.lua-runtime }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [template_debug, template_release]
-        threads: [true, false]
-        lua-runtime: [lua, luajit]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Setup godot-cpp
-        uses: ./lib/godot-cpp/.github/actions/setup-godot-cpp
-        with:
-          platform: web
-          scons-version: $SCONS_VERSION
-      - name: Cache SCons files
-        uses: actions/cache@v4
-        with:
-          path: .scons-cache/
-          key: web-wasm32-${{ matrix.target }}-${{ matrix.threads && 'threads' || 'nothreads' }}-${{ matrix.lua-runtime }}-${{ hashfiles('.gitmodules', 'src/**') }}
-          restore-keys: |
-            web-wasm32-${{ matrix.target }}-${{ matrix.threads && 'threads' || 'nothreads' }}-${{ matrix.lua-runtime }}-
-      - name: Build artifact
-        run: |
-          scons platform=web arch=wasm32 target=${{ matrix.target }} threads=${{ matrix.threads }} lua_runtime=${{ matrix.lua-runtime }}
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-wasm32-${{ matrix.target }}-${{ matrix.threads && 'threads' || 'nothreads' }}-${{ matrix.lua-runtime }}
-          path: |
-            addons/lua-gdextension/build/libluagdextension.*
-
-  build_macos:
-    name: ${{ matrix.platform }} (${{ matrix.arch }}, ${{ matrix.target }}, ${{ matrix.lua-runtime }})
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [template_debug, template_release]
-        arch: [universal]
-        platform: [macos, ios]
-        lua-runtime: [lua, luajit]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Setup godot-cpp
-        uses: ./lib/godot-cpp/.github/actions/setup-godot-cpp
-        with:
-          platform: ${{ matrix.platform }}
-          scons-version: $SCONS_VERSION
-      - name: Cache SCons files
-        uses: actions/cache@v4
-        with:
-          path: .scons-cache/
-          key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}-${{ hashfiles('.gitmodules', 'src/**') }}
-          restore-keys: |
-            ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}-
-      - name: Build artifact
-        run: |
-          scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=${{ matrix.target }} lua_runtime=${{ matrix.lua-runtime }}
         env:
           PYTHON_BIN: python3
+        run: |
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            scons platform=windows arch=${{ matrix.arch }} target=${{ matrix.target }} lua_runtime=lua \
+              vcvarsall_path="C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
+          else
+            scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=${{ matrix.target }} lua_runtime=lua
+          fi
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-${{ matrix.lua-runtime }}
+          name: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}
           path: |
             addons/lua-gdextension/build/lib*
 
-  test_distribution:
-    name: Test ${{ matrix.name }} (${{ matrix.lua-runtime }})
-    needs: [build_linux, build_windows, build_macos, build_web]
-    runs-on: ${{ matrix.runner-os }}
+  test:
+    name: Test ${{ matrix.name }}
+    needs: [build]
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        name: ["Linux", "Linux (arm64)", "Windows", "Windows (arm64)", "macOS"]
-        lua-runtime: [lua, luajit]
         include:
           - name: Linux
-            runner-os: ubuntu-latest
-            godot-release: 4.6-stable/Godot_v4.6-stable_linux.x86_64.zip
-            godot-bin: ./Godot_v4.6-stable_linux.x86_64
-          - name: Linux (arm64)
-            runner-os: ubuntu-24.04-arm
-            godot-release: 4.6-stable/Godot_v4.6-stable_linux.arm64.zip
-            godot-bin: ./Godot_v4.6-stable_linux.arm64
+            runner: ubuntu-latest
+            godot-zip: Godot_v4.7.2-stable_linux.x86_64.zip
+            godot-bin: ./Godot_v4.7.2-stable_linux.x86_64
           - name: Windows
-            runner-os: windows-latest
-            godot-release: 4.6-stable/Godot_v4.6-stable_win64.exe.zip
-            godot-bin: ./Godot_v4.6-stable_win64.exe
-          - name: Windows (arm64)
-            runner-os: windows-11-arm
-            godot-release: 4.6-stable/Godot_v4.6-stable_windows_arm64.exe.zip
-            godot-bin: ./Godot_v4.6-stable_windows_arm64.exe
+            runner: windows-latest
+            godot-zip: Godot_v4.7.2-stable_win64.exe.zip
+            godot-bin: ./Godot_v4.7.2-stable_win64.exe
           - name: macOS
-            runner-os: macos-latest
-            godot-release: 4.6-stable/Godot_v4.6-stable_macos.universal.zip
+            runner: macos-latest
+            godot-zip: Godot_v4.7.2-stable_macos.universal.zip
             godot-bin: ./Godot.app/Contents/MacOS/Godot
     env:
       GODOT_BIN: ${{ matrix.godot-bin }}
@@ -221,32 +101,31 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: "*-${{ matrix.lua-runtime }}"
       - name: Setup godot-cpp
         uses: ./lib/godot-cpp/.github/actions/setup-godot-cpp
         with:
           platform: linux
-          scons-version: $SCONS_VERSION
+          scons-version: ${{ env.SCONS_VERSION }}
       - name: Copy artifacts to build folder
+        env:
+          PYTHON_BIN: python3
         run: |
-          scons lua_runtime=${{ matrix.lua-runtime }} addons_files
+          scons lua_runtime=lua addons_files
           cp -r '${{ steps.download.outputs.download-path }}'/**/lib* addons/lua-gdextension/build
       - name: Download Godot
         run: |
-          curl --location https://github.com/godotengine/godot/releases/download/${{ matrix.godot-release }} --output godot.zip
-          unzip godot.zip
+          curl --fail --location https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}/${{ matrix.godot-zip }} --output godot.zip
+          unzip -q godot.zip
       - name: Run tests
         run: |
           make test
 
-  distribute_zip:
-    name: Distribute zip (${{ matrix.lua-runtime }})
-    needs: [build_linux, build_windows, build_macos, build_web]
+  distribute:
+    name: Distribute zip
+    needs: [build, test]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        lua-runtime: [lua, luajit]
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -256,24 +135,28 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: "*-${{ matrix.lua-runtime }}"
       - name: Setup godot-cpp
         uses: ./lib/godot-cpp/.github/actions/setup-godot-cpp
         with:
           platform: linux
-          scons-version: $SCONS_VERSION
-      - name: Copy artifacts to build folder
+          scons-version: ${{ env.SCONS_VERSION }}
+      - name: Assemble addon
+        env:
+          PYTHON_BIN: python3
         run: |
-          scons lua_runtime=${{ matrix.lua-runtime }} addons_files lua_api
+          scons lua_runtime=lua addons_files
           cp -r ${{ steps.download.outputs.download-path }}/**/lib* addons/lua-gdextension/build
+          zip -qr lua-gdextension.zip LICENSE addons/lua-gdextension
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.lua-runtime == 'lua' && 'lua-gdextension' || format('lua-gdextension+{0}', matrix.lua-runtime) }}
-          path: |
-            LICENSE
-            .luarc.json
-            addons/lua-gdextension/**
-            addons/lua-gdextension/build/.gdignore
-          include-hidden-files: true
-
+          name: lua-gdextension
+          path: lua-gdextension.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/mindslop-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" lua-gdextension.zip \
+            --title "${{ github.ref_name }}" \
+            --notes "MindSlop fork of lua-gdextension 0.8.2: memory limit enforced in the allocator, LUA_NOCVTS2N, Lua API access from GDScript run in protected mode."

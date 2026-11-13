@@ -102,6 +102,13 @@ public:
 		GC_MODE_GENERATIONAL = (int) sol::gc_mode::generational,
 	};
 
+	/// Bytes currently allocated through the Lua allocator, and the cap enforced at
+	/// allocation time (0 = no cap).
+	struct MemoryBudget {
+		size_t used = 0;
+		size_t limit = 0;
+	};
+
 	LuaState();
 	virtual ~LuaState();
 
@@ -134,6 +141,8 @@ public:
 	void restart_gc();
 	bool is_gc_running() const;
 	uint64_t get_memory_used() const;
+	void set_memory_limit(int64_t bytes);
+	int64_t get_memory_limit() const;
 	GcMode change_gc_mode_incremental(int pause, int step_multiplier, int step_byte_size);
 	GcMode change_gc_mode_generational(int minor_multiplier, int major_multiplier);
 	bool supports_gc_mode(GcMode mode) const;
@@ -156,6 +165,8 @@ protected:
 
 	String _to_string() const;
 
+	/// Declared before `lua_state`, which receives a pointer to it.
+	MemoryBudget memory_budget;
 	sol::state lua_state;
 #ifdef HAVE_LUA_WARN
 	bool warning_on = true;

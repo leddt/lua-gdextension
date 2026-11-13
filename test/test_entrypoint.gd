@@ -46,3 +46,4 @@ func _process(_delta):
 			obj.queue_free()
 	
 	quit(0 if all_success else -1)
+	return true

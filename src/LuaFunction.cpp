@@ -21,6 +21,10 @@
  */
 #include "LuaFunction.hpp"
 
+#include "LuaError.hpp"
+#include "LuaState.hpp"
+#include "utils/protected_call.hpp"
+
 #include "LuaDebug.hpp"
 #include "utils/VariantArguments.hpp"
 #include "utils/convert_godot_lua.hpp"
@@ -55,8 +59,27 @@ Variant LuaFunction::invoke_lua(Ref<LuaFunction> f, const VariantArguments& args
 }
 
 Variant LuaFunction::invoke_lua(const sol::protected_function& f, const VariantArguments& args, bool return_lua_error) {
-	sol::protected_function_result result = f.call(args);
-	return to_variant(result, return_lua_error);
+	// Pushing the arguments and converting the results happen outside the inner protected call.
+	// Under a memory limit they can fail: run the whole invocation protected, so the error never
+	// reaches the panic handler. Without a limit, keep the direct call (hooks see no extra frame).
+	LuaState *state = LuaState::find_lua_state(f.lua_state());
+	if (state == nullptr || state->get_memory_limit() == 0) {
+		sol::protected_function_result result = f.call(args);
+		return to_variant(result, return_lua_error);
+	}
+	Variant value;
+	String error;
+	bool ok = protected_call(f.lua_state(), [&](lua_State *) {
+		sol::protected_function_result result = f.call(args);
+		value = to_variant(result, return_lua_error);
+	}, &error);
+	if (!ok) {
+		if (return_lua_error) {
+			return memnew(LuaError(LuaError::RUNTIME, error));
+		}
+		ERR_FAIL_V_MSG(Variant(), error);
+	}
+	return value;
 }
 
 Callable LuaFunction::to_callable() const {
