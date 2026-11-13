@@ -18,23 +18,33 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.platform }} (${{ matrix.arch }}, ${{ matrix.target }})
+    name: ${{ matrix.platform }} (${{ matrix.arch }}, ${{ matrix.targets }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [template_debug, template_release]
-        platform: [linux, windows, macos]
         include:
           - platform: linux
             arch: x86_64
             runner: ubuntu-22.04
+            targets: template_debug
+          - platform: linux
+            arch: x86_64
+            runner: ubuntu-22.04
+            targets: template_release
           - platform: windows
             arch: x86_64
             runner: windows-latest
+            targets: template_debug
+          - platform: windows
+            arch: x86_64
+            runner: windows-latest
+            targets: template_release
+          # macOS runners are scarce: build both targets on one machine.
           - platform: macos
             arch: universal
             runner: macos-latest
+            targets: template_debug template_release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,23 +59,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .scons-cache/
-          key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-lua-${{ hashfiles('.gitmodules', 'src/**', 'tools/**') }}
+          key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.targets }}-lua-${{ hashfiles('.gitmodules', 'src/**', 'tools/**') }}
           restore-keys: |
-            ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}-lua-
+            ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.targets }}-lua-
       - name: Build artifact
         env:
           PYTHON_BIN: python3
         run: |
-          if [ "${{ matrix.platform }}" = "windows" ]; then
-            scons platform=windows arch=${{ matrix.arch }} target=${{ matrix.target }} lua_runtime=lua \
-              vcvarsall_path="C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
-          else
-            scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=${{ matrix.target }} lua_runtime=lua
-          fi
+          for target in ${{ matrix.targets }}; do
+            if [ "${{ matrix.platform }}" = "windows" ]; then
+              scons platform=windows arch=${{ matrix.arch }} target=$target lua_runtime=lua \
+                vcvarsall_path="C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
+            else
+              scons platform=${{ matrix.platform }} arch=${{ matrix.arch }} target=$target lua_runtime=lua
+            fi
+          done
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.target }}
+          name: ${{ matrix.platform }}-${{ matrix.arch }}-${{ strategy.job-index }}
           path: |
             addons/lua-gdextension/build/lib*
 
