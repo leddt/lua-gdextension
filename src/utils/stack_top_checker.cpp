@@ -22,6 +22,8 @@
 
 #ifdef DEBUG_ENABLED
 
+#include <exception>
+
 #include <godot_cpp/core/error_macros.hpp>
 
 #include "custom_sol.hpp"
@@ -37,6 +39,10 @@ StackTopChecker::StackTopChecker(lua_State *L, int expected_extra_values)
 }
 
 StackTopChecker::~StackTopChecker() {
+	// A Lua error unwinding through this scope leaves the stack to lua_pcall to restore.
+	if (std::uncaught_exceptions() > 0) {
+		return;
+	}
 	int top = lua_gettop(L);
 	if (top != previous_top + expected_extra_values) {
 		ERR_PRINT(String("Invalid stack top, expected %d, found %d") % Array::make(previous_top + expected_extra_values, top));
